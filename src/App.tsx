@@ -1,15 +1,17 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { TopBar } from './components/TopBar';
-import { GestureCanvas } from './components/GestureCanvas';
+import { GestureCanvas, GestureCanvasHandle } from './components/GestureCanvas';
 import { GestureLibrary } from './components/GestureLibrary';
 import { ThresholdPanel } from './components/ThresholdPanel';
 import { CodeEditor } from './components/CodeEditor';
 import { AIChat } from './components/AIChat';
 import { LivePreview } from './components/LivePreview';
 import { Recorder } from './components/Recorder';
+import { VisualGuideOverlay, GuideStep, TUTORIALS } from './components/VisualGuideOverlay';
 import { DEFAULT_THRESHOLDS, BUILT_IN_GESTURES, GestureDefinition } from './engine/gestures-defaults';
 import { GestureConfig } from './engine/gesture-engine';
 import { useHandTracking, TrackedHand } from './hooks/useHandTracking';
+import { AICommand } from './engine/ai-command-parser';
 
 type ViewMode = 'live' | 'edit' | 'record' | 'library' | 'ai' | '3d';
 
@@ -19,6 +21,15 @@ function App() {
   const [thresholds, setThresholds] = useState<GestureConfig>(DEFAULT_THRESHOLDS);
   const [liveLandmarks, setLiveLandmarks] = useState<{ x: number; y: number; z: number }[][] | null>(null);
   const [trackedHands, setTrackedHands] = useState<TrackedHand[]>([]);
+  
+  // AI Director state
+  const [guideSteps, setGuideSteps] = useState<GuideStep[]>([]);
+  const [guideStepIndex, setGuideStepIndex] = useState(0);
+  const [guideActive, setGuideActive] = useState(false);
+  const [pendingCommands, setPendingCommands] = useState<AICommand[]>([]);
+  
+  // Ref to GestureCanvas for 3D object commands
+  const canvasRef = useRef<GestureCanvasHandle>(null);
 
   const {
     videoRef,
@@ -63,12 +74,107 @@ function App() {
     setSelectedGesture(gesture);
   }, []);
 
+  // AI Command Handler — routes commands to the right systems
+  const handleExecuteCommand = useCallback((command: AICommand) => {
+    console.log('[AI Director] Executing command:', command);
+    
+    switch (command.type) {
+      case 'spawn_object': {
+        const shape = command.params.shape || 'cube';
+        if (!canvasRef.current) break;
+        switch (shape) {
+          case 'cube': canvasRef.current.addCube(); break;
+          case 'sphere': canvasRef.current.addSphere(); break;
+          case 'torus': canvasRef.current.addTorus(); break;
+          default: canvasRef.current.addCube();
+        }
+        break;
+      }
+      case 'clear_objects':
+        canvasRef.current?.clearAllObjects();
+        break;
+      case 'throw_objects':
+        canvasRef.current?.throwAllObjects();
+        break;
+      case 'reset_objects':
+        canvasRef.current?.resetObjects();
+        break;
+      case 'start_tutorial': {
+        const topic = command.params.topic || 'pinch';
+        const tutorial = (TUTORIALS as any)[topic];
+        if (tutorial) {
+          setGuideSteps(tutorial);
+          setGuideStepIndex(0);
+          setGuideActive(true);
+        }
+        break;
+      }
+      case 'navigate': {
+        const view = command.params.view as ViewMode;
+        if (view) setActiveView(view);
+        break;
+      }
+      case 'create_gesture': {
+        const name = command.params.name || 'CUSTOM';
+        const newGesture: GestureDefinition = {
+          id: `custom-${Date.now()}`,
+          name: name.toUpperCase(),
+          description: `AI-generated gesture: ${name}`,
+          hand: 'right',
+          type: 'custom',
+          action: 'custom',
+          thresholds: {},
+          successRate: 0,
+          createdAt: new Date().toISOString(),
+          isBuiltIn: false,
+        };
+        setSelectedGesture(newGesture);
+        setActiveView('edit');
+        break;
+      }
+      case 'set_threshold': {
+        const { category, key, value } = command.params;
+        if (category && key && value !== undefined) {
+          handleThresholdChange(category, key, Number(value));
+        }
+        break;
+      }
+      case 'highlight_area':
+      case 'show_arrow':
+        // These are handled by the VisualGuideOverlay
+        break;
+      default:
+        console.log('[AI Director] Unhandled command type:', command.type);
+    }
+  }, [handleThresholdChange]);
+
+  // Navigation handler for AI
+  const handleNavigate = useCallback((view: string) => {
+    setActiveView(view as ViewMode);
+  }, []);
+
+  // Tutorial controls
+  const handleGuideStepComplete = useCallback((stepId: string) => {
+    if (guideStepIndex < guideSteps.length - 1) {
+      setGuideStepIndex(prev => prev + 1);
+    } else {
+      setGuideActive(false);
+    }
+  }, [guideStepIndex, guideSteps.length]);
+
+  const handleGuideComplete = useCallback(() => {
+    setGuideActive(false);
+    setGuideSteps([]);
+    setGuideStepIndex(0);
+  }, []);
+
   const renderCenterContent = () => {
     switch (activeView) {
       case 'record':
         return (
           <div className="flex flex-col gap-3 h-full">
             <GestureCanvas
+              ref={canvasRef}
               videoRef={videoRef}
               landmarks={liveLandmarks}
               selectedGesture={selectedGesture}
@@ -84,6 +190,7 @@ function App() {
       default:
         return (
           <GestureCanvas
+            ref={canvasRef}
             videoRef={videoRef}
             landmarks={liveLandmarks}
             selectedGesture={selectedGesture}
@@ -102,7 +209,12 @@ function App() {
       case 'edit':
         return <CodeEditor />;
       case 'ai':
-        return <AIChat />;
+        return (
+          <AIChat 
+            onExecuteCommand={handleExecuteCommand}
+            onNavigate={handleNavigate}
+          />
+        );
       case '3d':
         return (
           <div className="glass-panel h-full flex flex-col overflow-hidden">
@@ -122,15 +234,14 @@ function App() {
                 3D Objects Integrated
               </div>
               <div className="text-[11px] leading-relaxed mb-4" style={{ color: 'var(--text-secondary)' }}>
-                3D objects are now rendered directly in the main camera viewport alongside hand tracking.
+                3D objects render directly in the main camera viewport.
               </div>
               <div className="glass-panel-sm p-3 text-left text-[10px] space-y-2" style={{ color: 'var(--text-secondary)' }}>
-                <div><strong style={{ color: 'var(--text-primary)' }}>How to use:</strong></div>
-                <div>1. Click the <span style={{ color: 'var(--accent)' }}>⬡ 3D Objects</span> button in the main viewport</div>
-                <div>2. Add cubes, spheres, or torus objects</div>
-                <div>3. Objects have physics and fall with gravity</div>
-                <div>4. Use "Throw All" to launch objects</div>
-                <div>5. Objects render on top of your camera feed</div>
+                <div><strong style={{ color: 'var(--text-primary)' }}>Try saying to AI:</strong></div>
+                <div>• "Create a cube"</div>
+                <div>• "Throw all objects"</div>
+                <div>• "Clear everything"</div>
+                <div>• "Teach me 3D objects"</div>
               </div>
             </div>
           </div>
@@ -200,8 +311,25 @@ function App() {
         <span>Gesture: {selectedGesture.name}</span>
         <span>|</span>
         <span>Hands: {liveLandmarks ? liveLandmarks.length : 0}</span>
-        <span className="ml-auto">ChArLI Barehands Studio v1.0</span>
+        <span className="ml-auto flex items-center gap-2">
+          {guideActive && (
+            <span className="flex items-center gap-1" style={{ color: 'var(--accent)' }}>
+              <span className="animate-pulse">◈</span>
+              Tutorial Active
+            </span>
+          )}
+          ChArLI Barehands Studio v1.0
+        </span>
       </div>
+
+      {/* Visual Guide Overlay */}
+      <VisualGuideOverlay
+        steps={guideSteps}
+        currentStepIndex={guideStepIndex}
+        isActive={guideActive}
+        onComplete={handleGuideComplete}
+        onStepComplete={handleGuideStepComplete}
+      />
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, RefObject, useState } from 'react';
+import React, { useRef, useEffect, RefObject, useState, useImperativeHandle, forwardRef } from 'react';
 import * as THREE from 'three';
 import { GestureDefinition, BONE_CONNECTIONS } from '../engine/gestures-defaults';
 import { GestureConfig, toScreen, landmarkUtils } from '../engine/gesture-engine';
@@ -20,7 +20,16 @@ interface GestureCanvasProps {
   onCameraToggle: () => void;
 }
 
-export function GestureCanvas({
+export interface GestureCanvasHandle {
+  addCube: () => void;
+  addSphere: () => void;
+  addTorus: () => void;
+  throwAllObjects: () => void;
+  resetObjects: () => void;
+  clearAllObjects: () => void;
+}
+
+export const GestureCanvas = forwardRef<GestureCanvasHandle, GestureCanvasProps>(function GestureCanvas({
   videoRef,
   landmarks,
   selectedGesture,
@@ -29,7 +38,7 @@ export function GestureCanvas({
   cameraActive,
   trackingState,
   onCameraToggle,
-}: GestureCanvasProps) {
+}, ref) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animFrameRef = useRef<number>(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -639,6 +648,16 @@ export function GestureCanvas({
     setObjectCount(0);
   };
 
+  // Expose 3D object methods to parent component
+  useImperativeHandle(ref, () => ({
+    addCube,
+    addSphere,
+    addTorus,
+    throwAllObjects,
+    resetObjects,
+    clearAllObjects,
+  }));
+
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-hidden" style={{ minHeight: '400px' }}>
       <canvas
@@ -800,4 +819,4 @@ export function GestureCanvas({
       )}
     </div>
   );
-}
+});
