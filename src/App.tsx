@@ -7,7 +7,6 @@ import { CodeEditor } from './components/CodeEditor';
 import { AIChat } from './components/AIChat';
 import { LivePreview } from './components/LivePreview';
 import { Recorder } from './components/Recorder';
-import { Object3DViewport } from './components/Object3DViewport';
 import { DEFAULT_THRESHOLDS, BUILT_IN_GESTURES, GestureDefinition } from './engine/gestures-defaults';
 import { GestureConfig } from './engine/gesture-engine';
 import { useHandTracking, TrackedHand } from './hooks/useHandTracking';
@@ -105,7 +104,37 @@ function App() {
       case 'ai':
         return <AIChat />;
       case '3d':
-        return <Object3DViewport />;
+        return (
+          <div className="glass-panel h-full flex flex-col overflow-hidden">
+            <div className="px-3 py-2 border-b flex items-center justify-between"
+              style={{ borderColor: 'rgba(140, 240, 225, 0.2)' }}>
+              <span className="text-xs font-bold tracking-wider" style={{ color: 'var(--text-primary)' }}>
+                3D OBJECTS
+              </span>
+              <span className="text-[9px] px-1.5 py-0.5 rounded"
+                style={{ background: 'rgba(111, 229, 214, 0.15)', color: 'var(--accent)' }}>
+                ✓ Integrated
+              </span>
+            </div>
+            <div className="flex-1 p-4 flex flex-col items-center justify-center text-center">
+              <div className="text-4xl mb-3">⬡</div>
+              <div className="text-sm font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
+                3D Objects Integrated
+              </div>
+              <div className="text-[11px] leading-relaxed mb-4" style={{ color: 'var(--text-secondary)' }}>
+                3D objects are now rendered directly in the main camera viewport alongside hand tracking.
+              </div>
+              <div className="glass-panel-sm p-3 text-left text-[10px] space-y-2" style={{ color: 'var(--text-secondary)' }}>
+                <div><strong style={{ color: 'var(--text-primary)' }}>How to use:</strong></div>
+                <div>1. Click the <span style={{ color: 'var(--accent)' }}>⬡ 3D Objects</span> button in the main viewport</div>
+                <div>2. Add cubes, spheres, or torus objects</div>
+                <div>3. Objects have physics and fall with gravity</div>
+                <div>4. Use "Throw All" to launch objects</div>
+                <div>5. Objects render on top of your camera feed</div>
+              </div>
+            </div>
+          </div>
+        );
       case 'library':
         return <LivePreview />;
       default:

@@ -1,4 +1,5 @@
-import React, { useRef, useEffect, RefObject } from 'react';
+import React, { useRef, useEffect, RefObject, useState } from 'react';
+import * as THREE from 'three';
 import { GestureDefinition, BONE_CONNECTIONS } from '../engine/gestures-defaults';
 import { GestureConfig, toScreen, landmarkUtils } from '../engine/gesture-engine';
 import { HandTrackingState } from '../hooks/useHandTracking';
@@ -35,6 +36,14 @@ export function GestureCanvas({
   const mousePosRef = useRef<{ x: number; y: number } | null>(null);
   const mouseDownRef = useRef(false);
   const canvasSizeRef = useRef({ width: 480, height: 480 });
+  
+  // Three.js refs for 3D objects
+  const threeSceneRef = useRef<THREE.Scene | null>(null);
+  const threeCameraRef = useRef<THREE.PerspectiveCamera | null>(null);
+  const threeRendererRef = useRef<THREE.WebGLRenderer | null>(null);
+  const threeObjectsRef = useRef<Array<{ id: string; mesh: THREE.Mesh; velocity: THREE.Vector3; grabbed: boolean }>>([]);
+  const [objectCount, setObjectCount] = useState(0);
+  const [show3DControls, setShow3DControls] = useState(false);
   
   // New optimization systems
   const stateMachineRef = useRef<GestureStateMachine>(new GestureStateMachine());
@@ -73,6 +82,108 @@ export function GestureCanvas({
 
     return () => {
       resizeObserver.disconnect();
+    };
+  }, []);
+
+  // Initialize Three.js for 3D objects
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    // Scene setup
+    const scene = new THREE.Scene();
+    threeSceneRef.current = scene;
+
+    // Camera
+    const camera = new THREE.PerspectiveCamera(
+      75,
+      container.clientWidth / container.clientHeight,
+      0.1,
+      1000
+    );
+    camera.position.z = 5;
+    threeCameraRef.current = camera;
+
+    // Renderer with transparent background
+    const renderer = new THREE.WebGLRenderer({ 
+      antialias: true, 
+      alpha: true,
+      premultipliedAlpha: false
+    });
+    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setPixelRatio(window.devicePixelRatio);
+    renderer.setClearColor(0x000000, 0); // Transparent
+    
+    // Position renderer on top of canvas
+    renderer.domElement.style.position = 'absolute';
+    renderer.domElement.style.top = '0';
+    renderer.domElement.style.left = '0';
+    renderer.domElement.style.pointerEvents = 'none';
+    renderer.domElement.style.zIndex = '2';
+    
+    container.appendChild(renderer.domElement);
+    threeRendererRef.current = renderer;
+
+    // Lighting
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    scene.add(ambientLight);
+
+    const directionalLight = new THREE.DirectionalLight(0x8ff0e4, 1);
+    directionalLight.position.set(5, 5, 5);
+    scene.add(directionalLight);
+
+    const pointLight = new THREE.PointLight(0x6fe5d6, 0.5, 10);
+    pointLight.position.set(-3, 3, 3);
+    scene.add(pointLight);
+
+    // Animation loop for 3D objects
+    const animate3D = () => {
+      requestAnimationFrame(animate3D);
+
+      // Update physics for 3D objects
+      threeObjectsRef.current.forEach(obj => {
+        if (!obj.grabbed) {
+          // Apply gravity
+          obj.velocity.y -= 0.01;
+          obj.mesh.position.add(obj.velocity);
+
+          // Bounce off ground
+          if (obj.mesh.position.y < -2) {
+            obj.mesh.position.y = -2;
+            obj.velocity.y *= -0.6;
+            obj.velocity.x *= 0.95;
+            obj.velocity.z *= 0.95;
+          }
+
+          // Rotation based on velocity
+          obj.mesh.rotation.x += obj.velocity.x * 0.1;
+          obj.mesh.rotation.y += obj.velocity.y * 0.1;
+        }
+      });
+
+      renderer.render(scene, camera);
+    };
+    animate3D();
+
+    // Handle resize
+    const handleResize = () => {
+      if (!container || !camera || !renderer) return;
+      const width = container.clientWidth;
+      const height = container.clientHeight;
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      renderer.setSize(width, height);
+    };
+
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(container);
+
+    return () => {
+      resizeObserver.disconnect();
+      if (container && renderer.domElement) {
+        container.removeChild(renderer.domElement);
+      }
+      renderer.dispose();
     };
   }, []);
 
@@ -414,6 +525,120 @@ export function GestureCanvas({
     }
   };
 
+  // 3D Object Management Functions
+  const addCube = () => {
+    if (!threeSceneRef.current) return;
+
+    const geometry = new THREE.BoxGeometry(1, 1, 1);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x8ff0e4,
+      metalness: 0.5,
+      roughness: 0.5,
+    });
+    const cube = new THREE.Mesh(geometry, material);
+    cube.position.set(
+      (Math.random() - 0.5) * 4,
+      2,
+      (Math.random() - 0.5) * 2
+    );
+    threeSceneRef.current.add(cube);
+
+    threeObjectsRef.current.push({
+      id: `cube-${Date.now()}`,
+      mesh: cube,
+      velocity: new THREE.Vector3(0, 0, 0),
+      grabbed: false,
+    });
+
+    setObjectCount(threeObjectsRef.current.length);
+  };
+
+  const addSphere = () => {
+    if (!threeSceneRef.current) return;
+
+    const geometry = new THREE.SphereGeometry(0.6, 32, 32);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x6fe5d6,
+      metalness: 0.7,
+      roughness: 0.3,
+    });
+    const sphere = new THREE.Mesh(geometry, material);
+    sphere.position.set(
+      (Math.random() - 0.5) * 4,
+      2,
+      (Math.random() - 0.5) * 2
+    );
+    threeSceneRef.current.add(sphere);
+
+    threeObjectsRef.current.push({
+      id: `sphere-${Date.now()}`,
+      mesh: sphere,
+      velocity: new THREE.Vector3(0, 0, 0),
+      grabbed: false,
+    });
+
+    setObjectCount(threeObjectsRef.current.length);
+  };
+
+  const addTorus = () => {
+    if (!threeSceneRef.current) return;
+
+    const geometry = new THREE.TorusGeometry(0.5, 0.2, 16, 100);
+    const material = new THREE.MeshStandardMaterial({
+      color: 0xffd700,
+      metalness: 0.9,
+      roughness: 0.1,
+      emissive: 0xffd700,
+      emissiveIntensity: 0.2,
+    });
+    const torus = new THREE.Mesh(geometry, material);
+    torus.position.set(
+      (Math.random() - 0.5) * 4,
+      2,
+      (Math.random() - 0.5) * 2
+    );
+    threeSceneRef.current.add(torus);
+
+    threeObjectsRef.current.push({
+      id: `torus-${Date.now()}`,
+      mesh: torus,
+      velocity: new THREE.Vector3(0, 0, 0),
+      grabbed: false,
+    });
+
+    setObjectCount(threeObjectsRef.current.length);
+  };
+
+  const throwAllObjects = () => {
+    threeObjectsRef.current.forEach(obj => {
+      obj.velocity.set(
+        (Math.random() - 0.5) * 0.3,
+        Math.random() * 0.4 + 0.2,
+        (Math.random() - 0.5) * 0.3
+      );
+    });
+  };
+
+  const resetObjects = () => {
+    threeObjectsRef.current.forEach((obj, idx) => {
+      obj.mesh.position.set((idx - 1) * 2, 0, 0);
+      obj.velocity.set(0, 0, 0);
+    });
+  };
+
+  const clearAllObjects = () => {
+    if (!threeSceneRef.current) return;
+    
+    threeObjectsRef.current.forEach(obj => {
+      threeSceneRef.current!.remove(obj.mesh);
+      obj.mesh.geometry.dispose();
+      (obj.mesh.material as THREE.Material).dispose();
+    });
+    
+    threeObjectsRef.current = [];
+    setObjectCount(0);
+  };
+
   return (
     <div ref={containerRef} className="relative w-full h-full overflow-hidden" style={{ minHeight: '400px' }}>
       <canvas
@@ -458,6 +683,121 @@ export function GestureCanvas({
         </span>
         {!cameraActive && !trackingState.isInitializing && <span className="camera-toggle-pulse"></span>}
       </button>
+
+      {/* 3D Objects Toggle Button */}
+      <button
+        onClick={() => setShow3DControls(!show3DControls)}
+        className="absolute top-14 right-3 glass-panel-sm px-3 py-1.5 text-[10px] font-bold cursor-pointer hover:border-[var(--accent)] transition-all"
+        style={{ 
+          color: show3DControls ? 'var(--accent)' : 'var(--text-secondary)',
+          borderColor: show3DControls ? 'var(--accent)' : 'rgba(140, 240, 225, 0.3)',
+          background: show3DControls ? 'rgba(111, 229, 214, 0.15)' : 'rgba(52, 108, 100, 0.24)',
+          zIndex: 10,
+        }}
+      >
+        ⬡ 3D Objects {objectCount > 0 && `(${objectCount})`}
+      </button>
+
+      {/* 3D Objects Control Panel */}
+      {show3DControls && (
+        <div 
+          className="absolute top-28 right-3 glass-panel p-3 space-y-2"
+          style={{ 
+            width: '200px',
+            zIndex: 10,
+          }}
+        >
+          <div className="text-[9px] font-bold tracking-wider" style={{ color: 'var(--text-primary)' }}>
+            ADD OBJECTS
+          </div>
+          
+          <div className="flex flex-col gap-1.5">
+            <button
+              onClick={addCube}
+              className="text-[10px] px-2 py-1.5 rounded cursor-pointer text-left"
+              style={{
+                background: 'rgba(140, 240, 225, 0.1)',
+                border: '1px solid rgba(140, 240, 225, 0.3)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              ⬜ Cube
+            </button>
+            <button
+              onClick={addSphere}
+              className="text-[10px] px-2 py-1.5 rounded cursor-pointer text-left"
+              style={{
+                background: 'rgba(140, 240, 225, 0.1)',
+                border: '1px solid rgba(140, 240, 225, 0.3)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              ⚪ Sphere
+            </button>
+            <button
+              onClick={addTorus}
+              className="text-[10px] px-2 py-1.5 rounded cursor-pointer text-left"
+              style={{
+                background: 'rgba(140, 240, 225, 0.1)',
+                border: '1px solid rgba(140, 240, 225, 0.3)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              ⭕ Torus
+            </button>
+          </div>
+
+          <div className="pt-2 border-t" style={{ borderColor: 'rgba(140, 240, 225, 0.2)' }}>
+            <div className="text-[9px] font-bold tracking-wider mb-1.5" style={{ color: 'var(--text-primary)' }}>
+              ACTIONS
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <button
+                onClick={throwAllObjects}
+                disabled={objectCount === 0}
+                className="text-[10px] px-2 py-1.5 rounded cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                style={{
+                  background: 'rgba(255, 217, 61, 0.15)',
+                  border: '1px solid rgba(255, 217, 61, 0.4)',
+                  color: 'var(--warning)',
+                }}
+              >
+                🚀 Throw All
+              </button>
+              <button
+                onClick={resetObjects}
+                disabled={objectCount === 0}
+                className="text-[10px] px-2 py-1.5 rounded cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                style={{
+                  background: 'rgba(140, 240, 225, 0.1)',
+                  border: '1px solid rgba(140, 240, 225, 0.3)',
+                  color: 'var(--text-secondary)',
+                }}
+              >
+                ↻ Reset Positions
+              </button>
+              <button
+                onClick={clearAllObjects}
+                disabled={objectCount === 0}
+                className="text-[10px] px-2 py-1.5 rounded cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                style={{
+                  background: 'rgba(255, 107, 107, 0.15)',
+                  border: '1px solid rgba(255, 107, 107, 0.4)',
+                  color: 'var(--danger)',
+                }}
+              >
+                ✕ Clear All
+              </button>
+            </div>
+          </div>
+
+          {objectCount > 0 && (
+            <div className="pt-2 border-t text-[9px]" style={{ borderColor: 'rgba(140, 240, 225, 0.2)', color: 'var(--text-secondary)' }}>
+              <strong style={{ color: 'var(--text-primary)' }}>Tip:</strong> 3D objects have physics and will fall with gravity. Use gestures to interact!
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
