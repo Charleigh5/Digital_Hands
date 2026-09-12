@@ -4,9 +4,10 @@ interface GestureLibraryProps {
   gestures: GestureDefinition[];
   selectedGesture: GestureDefinition;
   onSelect: (gesture: GestureDefinition) => void;
+  onDragStart?: (gesture: GestureDefinition) => void;
 }
 
-export function GestureLibrary({ gestures, selectedGesture, onSelect }: GestureLibraryProps) {
+export function GestureLibrary({ gestures, selectedGesture, onSelect, onDragStart }: GestureLibraryProps) {
   const getTypeIcon = (type: string) => {
     switch (type) {
       case 'pinch': return '🤏';
@@ -39,9 +40,18 @@ export function GestureLibrary({ gestures, selectedGesture, onSelect }: GestureL
           <div
             key={gesture.id}
             onClick={() => onSelect(gesture)}
-            className={`gesture-card glass-panel-sm p-2.5 ${
+            draggable
+            onDragStart={(e) => {
+              e.dataTransfer.setData('gesture', JSON.stringify(gesture));
+              e.dataTransfer.effectAllowed = 'copy';
+              if (onDragStart) onDragStart(gesture);
+            }}
+            className={`gesture-card glass-panel-sm p-2.5 cursor-grab active:cursor-grabbing ${
               selectedGesture.id === gesture.id ? 'selected' : ''
             }`}
+            style={{
+              transition: 'all 0.2s ease',
+            }}
           >
             <div className="flex items-start gap-2">
               <span className="text-lg">{getTypeIcon(gesture.type)}</span>
@@ -52,6 +62,9 @@ export function GestureLibrary({ gestures, selectedGesture, onSelect }: GestureL
                 <div className="text-[9px] mt-0.5" style={{ color: 'var(--text-secondary)' }}>
                   {gesture.description}
                 </div>
+              </div>
+              <div className="text-[10px] opacity-50" style={{ color: 'var(--text-secondary)' }}>
+                ⋮⋮
               </div>
             </div>
             <div className="flex items-center gap-1 mt-1.5">

@@ -8,6 +8,7 @@ import { PredictiveGestureDetector } from '../engine/predictive-gesture';
 import { AdaptiveCalibration } from '../engine/adaptive-calibration';
 import { ConfidenceVisualizer } from '../engine/confidence-visualizer';
 import { LandmarkCache, TransformationCache } from '../engine/performance-cache';
+import { GestureTutorialPlayer } from './GestureTutorialPlayer';
 
 interface GestureCanvasProps {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -45,6 +46,10 @@ export const GestureCanvas = forwardRef<GestureCanvasHandle, GestureCanvasProps>
   const mousePosRef = useRef<{ x: number; y: number } | null>(null);
   const mouseDownRef = useRef(false);
   const canvasSizeRef = useRef({ width: 480, height: 480 });
+  
+  // Tutorial state
+  const [tutorialGesture, setTutorialGesture] = useState<GestureDefinition | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
   
   // Three.js refs for 3D objects
   const threeSceneRef = useRef<THREE.Scene | null>(null);
@@ -658,8 +663,45 @@ export const GestureCanvas = forwardRef<GestureCanvasHandle, GestureCanvasProps>
     clearAllObjects,
   }));
 
+  // Drop handlers
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    setIsDragOver(true);
+  };
+
+  const handleDragLeave = () => {
+    setIsDragOver(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOver(false);
+    
+    const gestureData = e.dataTransfer.getData('gesture');
+    if (gestureData) {
+      try {
+        const gesture = JSON.parse(gestureData) as GestureDefinition;
+        setTutorialGesture(gesture);
+      } catch (err) {
+        console.error('Failed to parse gesture data:', err);
+      }
+    }
+  };
+
   return (
-    <div ref={containerRef} className="relative w-full h-full overflow-hidden" style={{ minHeight: '400px' }}>
+    <div 
+      ref={containerRef} 
+      className="relative w-full h-full overflow-hidden" 
+      style={{ 
+        minHeight: '400px',
+        border: isDragOver ? '2px dashed var(--accent)' : 'none',
+        transition: 'border 0.2s ease',
+      }}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       <canvas
         ref={canvasRef}
         className="gesture-canvas"
@@ -816,6 +858,30 @@ export const GestureCanvas = forwardRef<GestureCanvasHandle, GestureCanvasProps>
             </div>
           )}
         </div>
+      )}
+
+      {/* Drag overlay indicator */}
+      {isDragOver && (
+        <div 
+          className="absolute inset-0 flex items-center justify-center pointer-events-none"
+          style={{ 
+            background: 'rgba(111, 229, 214, 0.1)',
+            zIndex: 100,
+          }}
+        >
+          <div className="text-2xl font-bold" style={{ color: 'var(--accent)' }}>
+            Drop to Start Tutorial
+          </div>
+        </div>
+      )}
+
+      {/* Tutorial Player */}
+      {tutorialGesture && (
+        <GestureTutorialPlayer
+          gestureType={tutorialGesture.type}
+          onComplete={() => setTutorialGesture(null)}
+          onCancel={() => setTutorialGesture(null)}
+        />
       )}
     </div>
   );
