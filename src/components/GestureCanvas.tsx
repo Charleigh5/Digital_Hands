@@ -2,6 +2,11 @@ import React, { useRef, useEffect, RefObject } from 'react';
 import { GestureDefinition, BONE_CONNECTIONS } from '../engine/gestures-defaults';
 import { GestureConfig, toScreen, landmarkUtils } from '../engine/gesture-engine';
 import { HandTrackingState } from '../hooks/useHandTracking';
+import { GestureStateMachine } from '../engine/gesture-state-machine';
+import { PredictiveGestureDetector } from '../engine/predictive-gesture';
+import { AdaptiveCalibration } from '../engine/adaptive-calibration';
+import { ConfidenceVisualizer } from '../engine/confidence-visualizer';
+import { LandmarkCache, TransformationCache } from '../engine/performance-cache';
 
 interface GestureCanvasProps {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -30,6 +35,15 @@ export function GestureCanvas({
   const mousePosRef = useRef<{ x: number; y: number } | null>(null);
   const mouseDownRef = useRef(false);
   const canvasSizeRef = useRef({ width: 480, height: 480 });
+  
+  // New optimization systems
+  const stateMachineRef = useRef<GestureStateMachine>(new GestureStateMachine());
+  const predictorRef = useRef<PredictiveGestureDetector>(new PredictiveGestureDetector());
+  const calibratorRef = useRef<AdaptiveCalibration>(new AdaptiveCalibration());
+  const visualizerRef = useRef<ConfidenceVisualizer>(new ConfidenceVisualizer());
+  const landmarkCacheRef = useRef<LandmarkCache>(new LandmarkCache());
+  const transformCacheRef = useRef<TransformationCache>(new TransformationCache());
+  const calibrationCompleteRef = useRef(false);
 
   // Resize canvas to fill container
   useEffect(() => {
@@ -177,6 +191,9 @@ export function GestureCanvas({
 
       // Draw tracked hands
       if (landmarks && landmarks.length > 0) {
+        // Invalidate caches for new frame
+        landmarkCacheRef.current.invalidateLandmarks();
+        
         landmarks.forEach((handLm, handIdx) => {
           drawHandSkeleton(ctx, handLm, width, height, handIdx);
         });
@@ -298,45 +315,78 @@ export function GestureCanvas({
     const videoWidth = videoRef.current?.videoWidth || 1280;
     const videoHeight = videoRef.current?.videoHeight || 720;
 
+    // Use cached transformation
     const transformLandmark = (point: { x: number; y: number; z: number }) => {
-      const vAspect = videoWidth / videoHeight;
-      const cAspect = w / h;
-      let drawW: number, drawH: number, drawX: number, drawY: number;
-      
-      if (vAspect > cAspect) {
-        drawH = h;
-        drawW = h * vAspect;
-        drawX = (w - drawW) / 2;
-        drawY = 0;
-      } else {
-        drawW = w;
-        drawH = w / vAspect;
-        drawX = 0;
-        drawY = (h - drawH) / 2;
-      }
-      
-      return {
-        x: drawX + (1 - point.x) * drawW,
-        y: drawY + point.y * drawH,
-      };
+      return transformCacheRef.current.getCoverFit(videoWidth, videoHeight, w, h);
     };
 
+    const coverFit = transformCacheRef.current.getCoverFit(videoWidth, videoHeight, w, h);
+    const transformPoint = (point: { x: number; y: number; z: number }) => ({
+      x: coverFit.drawX + (1 - point.x) * coverFit.drawW,
+      y: coverFit.drawY + point.y * coverFit.drawH,
+    });
+
+    // Adaptive calibration (first 3 seconds)
+    if (!calibrationCompleteRef.current && handIdx === 0) {
+      const calData = calibratorRef.current.calibrate(lm);
+      if (calData) {
+        calibrationCompleteRef.current = true;
+        const calibrated = calibratorRef.current.getCalibratedThresholds();
+        if (calibrated) {
+          stateMachineRef.current.setConfig({
+            enterThreshold: calibrated.pinchEnter,
+            exitThreshold: calibrated.pinchExit,
+          });
+        }
+      }
+    }
+
+    // Calculate pinch ratio using cached distances
+    const pinchDistance = landmarkCacheRef.current.getDistance(lm, 4, 8);
+    const palmWidth = landmarkCacheRef.current.getDistance(lm, 0, 9);
+    const pinchRatio = palmWidth > 0 ? pinchDistance / palmWidth : 1;
+
+    // Update state machine with pinch ratio
+    const state = stateMachineRef.current.update(pinchRatio);
+    
+    // Get prediction
+    const prediction = predictorRef.current.predict(
+      pinchRatio,
+      thresholds.pinch.ratio_enter_frontal
+    );
+
+    // Calculate stability using cached values
+    const bbox = landmarkCacheRef.current.getBoundingBox(lm);
+    const aspectRatio = landmarkCacheRef.current.getAspectRatio(lm);
+    const stability = state.stability;
+
+    // Draw bones
     BONE_CONNECTIONS.forEach((conn: number[]) => {
       const a = conn[0];
       const b = conn[1];
-      const pA = transformLandmark(lm[a]);
-      const pB = transformLandmark(lm[b]);
+      const pA = transformPoint(lm[a]);
+      const pB = transformPoint(lm[b]);
 
       ctx.beginPath();
       ctx.moveTo(pA.x, pA.y);
       ctx.lineTo(pB.x, pB.y);
-      ctx.strokeStyle = handColor.bone;
+      
+      // Color based on gesture phase
+      let boneColor = handColor.bone;
+      if (state.phase === 'active') {
+        boneColor = 'rgba(111, 229, 214, 1)';
+      } else if (state.phase === 'approaching') {
+        boneColor = `rgba(111, 229, 214, ${0.5 + state.confidence * 0.5})`;
+      }
+      
+      ctx.strokeStyle = boneColor;
       ctx.lineWidth = 2.5;
       ctx.stroke();
     });
 
+    // Draw landmarks
     lm.forEach((point, i) => {
-      const p = transformLandmark(point);
+      const p = transformPoint(point);
       const isTip = [4, 8, 12, 16, 20].includes(i);
       const radius = isTip ? 5 : 3;
 
@@ -345,6 +395,23 @@ export function GestureCanvas({
       ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
       ctx.fill();
     });
+
+    // Draw confidence visualization for first hand
+    if (handIdx === 0) {
+      const pinchPoint = landmarkCacheRef.current.getMidpoint(lm, 4, 8);
+      const pinchScreen = transformPoint(pinchPoint);
+      
+      visualizerRef.current.drawHUD(
+        ctx,
+        pinchScreen.x,
+        pinchScreen.y,
+        state.confidence,
+        state.phase,
+        prediction.timeToTrigger,
+        prediction.velocity,
+        stability
+      );
+    }
   };
 
   return (
